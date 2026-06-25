@@ -139,7 +139,7 @@ def main():
     args = parse_args()
 
     # Tous les runs CNN sont regroupés dans le même experiment MLflow.
-    mlflow.set_experiment("wound-classification-final")
+    mlflow.set_experiment("CNN-wound-classif")
 
     # Nom explicite pour comparer facilement les runs dans MLflow.
     run_name = (
