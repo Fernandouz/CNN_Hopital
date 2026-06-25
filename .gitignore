@@ -2,8 +2,11 @@ data/raw/
 data/processed/
 models/
 mlruns/
+mlflow.db
+reports/
 reports/evidently/
 .env
+.DS_Store
 __pycache__/
 .ipynb_checkpoints/
 .venv
