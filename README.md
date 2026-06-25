@@ -531,7 +531,7 @@ Remarque : la baseline custom est appelée `custom_cnn` dans le code.
 ### Lancer MLflow UI
 
 ```bash
-mlflow ui --port 5000
+mlflow ui --backend-store-uri sqlite:///mlflow.db --port 5000
 ```
 
 Puis ouvrir :

@@ -1,3 +1,13 @@
+import mlflow.pytorch
+import mlflow
+from sklearn.metrics import precision_score, recall_score, f1_score, classification_report, confusion_matrix
+import matplotlib.pyplot as plt
+from tqdm import tqdm
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.optim import AdamW
+import torch.nn as nn
+import torch
+from core.data_processing import build_dataloaders
 from core.model_utils import (
     build_model,
     freeze_backbone,
@@ -5,27 +15,36 @@ from core.model_utils import (
     count_total_parameters,
     count_trainable_parameters,
 )
-from core.data_processing import build_dataloaders
 from pathlib import Path
+import os
 import sys
 import copy
 import json
 import argparse
+import tempfile
 
-import torch
-import torch.nn as nn
-from torch.optim import AdamW
-from torch.optim.lr_scheduler import ReduceLROnPlateau
-from tqdm import tqdm
-
-import matplotlib.pyplot as plt
-from sklearn.metrics import precision_score, recall_score, f1_score, classification_report, confusion_matrix
-
-import mlflow
-import mlflow.pytorch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(PROJECT_ROOT))
+
+
+def configure_runtime_dirs():
+    """Prépare des dossiers locaux pour les caches temporaires MLflow/PyTorch."""
+    tmp_dir = PROJECT_ROOT / ".tmp"
+    torch_cache_dir = tmp_dir / "torch"
+
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    torch_cache_dir.mkdir(parents=True, exist_ok=True)
+
+    os.environ.setdefault("TMPDIR", str(tmp_dir))
+    os.environ.setdefault("TEMP", str(tmp_dir))
+    os.environ.setdefault("TMP", str(tmp_dir))
+    os.environ.setdefault("TORCHINDUCTOR_CACHE_DIR", str(torch_cache_dir))
+
+    tempfile.tempdir = str(tmp_dir)
+
+
+configure_runtime_dirs()
 
 
 def parse_args():
@@ -138,8 +157,10 @@ def evaluate(model, loader, criterion, device):
 def main():
     args = parse_args()
 
+    mlflow.set_tracking_uri(f"sqlite:///{PROJECT_ROOT / 'mlflow.db'}")
+
     # Tous les runs CNN sont regroupés dans le même experiment MLflow.
-    mlflow.set_experiment("CNN-wound-classif")
+    mlflow.set_experiment("CNN-wound-classification")
 
     # Nom explicite pour comparer facilement les runs dans MLflow.
     run_name = (
@@ -414,11 +435,16 @@ def main():
         mlflow.log_artifact(str(checkpoint_path), artifact_path="checkpoints")
         mlflow.log_artifact(str(history_path), artifact_path="history")
 
-        # Désactivé pour éviter un artefact MLflow volumineux pendant les tests.
-        # mlflow.pytorch.log_model(
-        #     pytorch_model=model,
-        #     artifact_path="model"
-        # )
+        # MLflow sérialise mieux un modèle CPU et on logge le meilleur état.
+        model.load_state_dict(best_model_state)
+        model_to_log = copy.deepcopy(model).to("cpu")
+        model_to_log.eval()
+
+        mlflow.pytorch.log_model(
+            pytorch_model=model_to_log,
+            name="model",
+            serialization_format=mlflow.pytorch.SERIALIZATION_FORMAT_PICKLE,
+        )
 
         print(f"\nMeilleur modèle sauvegardé : {checkpoint_path}")
         print(f"Historique sauvegardé : {history_path}")

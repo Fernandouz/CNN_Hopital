@@ -22,6 +22,20 @@ def parse_args():
         help="Split évalué à agréger : val ou test."
     )
 
+    parser.add_argument(
+        "--contains",
+        type=str,
+        default=None,
+        help="Filtre optionnel : conserve seulement les runs dont le nom contient cette chaîne."
+    )
+
+    parser.add_argument(
+        "--exclude",
+        type=str,
+        default=None,
+        help="Filtre optionnel : exclut les runs dont le nom contient cette chaîne."
+    )
+
     return parser.parse_args()
 
 
@@ -31,9 +45,23 @@ def main():
     summary_paths = sorted(EVAL_DIR.glob(
         f"*/{args.split}/evaluation_summary.json"))
 
+    if args.contains:
+        summary_paths = [
+            path for path in summary_paths
+            if args.contains in path.parts[-3]
+        ]
+
+    if args.exclude:
+        summary_paths = [
+            path for path in summary_paths
+            if args.exclude not in path.parts[-3]
+        ]
+
     if not summary_paths:
         print(
             f"Aucun fichier evaluation_summary.json trouvé pour le split : {args.split}")
+        print(f"Filtre contains : {args.contains}")
+        print(f"Filtre exclude : {args.exclude}")
         return
 
     rows = []
@@ -64,7 +92,10 @@ def main():
     ]
 
     existing_columns = [
-        col for col in columns_order if col in comparison_df.columns]
+        col for col in columns_order
+        if col in comparison_df.columns
+    ]
+
     comparison_df = comparison_df[existing_columns]
 
     comparison_df = comparison_df.sort_values(
@@ -72,7 +103,9 @@ def main():
         ascending=False
     )
 
-    output_path = EVAL_DIR / f"model_comparison_{args.split}.csv"
+    suffix = f"_{args.contains}" if args.contains else ""
+    output_path = EVAL_DIR / f"model_comparison_{args.split}{suffix}.csv"
+
     comparison_df.to_csv(output_path, index=False)
 
     print("\nComparaison des modèles :")
