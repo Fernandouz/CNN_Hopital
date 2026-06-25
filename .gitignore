@@ -1,0 +1,9 @@
+data/raw/
+data/processed/
+models/
+mlruns/
+reports/evidently/
+.env
+__pycache__/
+.ipynb_checkpoints/
+.venv
