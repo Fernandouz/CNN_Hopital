@@ -45,6 +45,8 @@ CNN_Hopital/
 │   ├── model_utils.py
 │   ├── inference.py
 │   ├── autoencoder.py
+│   ├── ood_detection.py
+│   ├── pipeline.py
 │   ├── grad_cam.py
 │   ├── image_similarity.py
 │   ├── database.py
@@ -58,18 +60,29 @@ CNN_Hopital/
 │   │       ├── train.csv
 │   │       ├── val.csv
 │   │       └── test.csv
+│   ├── ood/
+│   │   ├── cat.jpg
+│   │   ├── landscape.jpg
+│   │   ├── xray.jpg
+│   │   ├── random_object.jpg
+│   │   └── healthy_skin_or_other.jpg
 │   └── base_connaissances_medicales.jsonl
 │
 ├── notebooks/
 │   ├── 01_exploration_dataset.ipynb
 │   ├── 02_data_augmentation.ipynb
 │   ├── 03_training_cnn.ipynb
-│   └── 04_evaluation_models.ipynb
+│   ├── 04_evaluation_models.ipynb
+│   └── autoencoder_ood_analysis.ipynb
 │
 ├── scripts/
 │   ├── train_cnn.py
 │   ├── evaluate_cnn.py
 │   ├── predict_image.py
+│   ├── train_autoencoder.py
+│   ├── evaluate_autoencoder.py
+│   ├── evaluate_autoencoder_latent_gmm.py
+│   ├── analyze_image.py
 │   └── drift_monitoring.py
 │
 ├── app-streamlit/
@@ -113,6 +126,19 @@ data/raw/
 
 Les images brutes ne doivent pas être versionnées dans Git.  
 Le dossier `data/raw/` est donc exclu via `.gitignore`.
+
+Un petit jeu d’images hors-domaine est disponible pour tester le filtre OOD :
+
+```text
+data/ood/
+├── cat.jpg
+├── landscape.jpg
+├── xray.jpg
+├── random_object.jpg
+└── healthy_skin_or_other.jpg
+```
+
+Ces images ne servent pas à entraîner le modèle. Elles permettent uniquement de vérifier si le pipeline rejette correctement des images qui ne correspondent pas au domaine des plaies.
 
 ---
 
@@ -273,6 +299,32 @@ Il fournit notamment :
 - la reconstruction du modèle avec l’architecture et le mapping de classes sauvegardés ;
 - les transformations d’inférence compatibles ImageNet ;
 - la fonction `predict_image`, qui retourne la classe prédite, la confiance et le top-K des classes.
+
+### `core/autoencoder.py`
+
+Ce fichier contient l’autoencoder convolutif utilisé pour la détection hors-domaine.
+
+Le modèle apprend à reconstruire les images du domaine connu. Deux stratégies d’évaluation sont comparées :
+
+- erreur de reconstruction pixel, avec seuil calibré sur la validation ;
+- modélisation de l’espace latent avec un `GaussianMixture` de scikit-learn.
+
+### `core/ood_detection.py`
+
+Ce fichier fournit les fonctions d’inférence OOD sur image unique :
+
+- chargement du checkpoint autoencoder ;
+- chargement du seuil `ood_threshold.json` ;
+- calcul de l’erreur de reconstruction ;
+- décision `Image acceptée` ou `Image hors domaine`.
+
+### `core/pipeline.py`
+
+Ce fichier assemble le pipeline complet :
+
+1. détection OOD par autoencoder ;
+2. rejet de l’image si elle dépasse le seuil ;
+3. classification CNN uniquement si l’image est acceptée.
 
 ---
 
@@ -664,6 +716,244 @@ python3 scripts/evaluate_cnn.py \
 
 ---
 
+## Détection hors-domaine par autoencoder
+
+Le projet intègre un autoencoder convolutif pour détecter les images hors-domaine avant classification CNN.
+
+L’objectif est d’éviter de forcer le ResNet50 à classer une image qui ne ressemble pas au domaine des plaies, par exemple un paysage, une radiographie ou un objet de bureau.
+
+### Entraînement de l’autoencoder
+
+Script :
+
+```text
+scripts/train_autoencoder.py
+```
+
+Commande utilisée pour le modèle final :
+
+```bash
+python -m scripts.train_autoencoder \
+  --epochs 100 \
+  --batch-size 16 \
+  --latent-dim 256 \
+  --lr 1e-4 \
+  --run-suffix final
+```
+
+Le checkpoint final est :
+
+```text
+models/conv_autoencoder_latent-256_lr-0.0001_final_best.pt
+```
+
+Le meilleur autoencoder a été entraîné pendant 71 epochs effectives avec une meilleure loss validation de reconstruction d’environ `0.01391`.
+
+Les artefacts d’entraînement sont sauvegardés dans :
+
+```text
+reports/ood/conv_autoencoder_latent-256_lr-0.0001_final/
+```
+
+Ce dossier contient notamment :
+
+- `autoencoder_history.json` ;
+- `autoencoder_training_curves.png` ;
+- `reconstruction_examples.png`.
+
+### Évaluation par erreur de reconstruction
+
+Script :
+
+```text
+scripts/evaluate_autoencoder.py
+```
+
+Commande :
+
+```bash
+python3 scripts/evaluate_autoencoder.py \
+  --checkpoint models/conv_autoencoder_latent-256_lr-0.0001_final_best.pt \
+  --threshold-percentile 95 \
+  --batch-size 16 \
+  --num-workers 0 \
+  --ood-dir data/ood
+```
+
+Le seuil est calibré sur le percentile 95 des erreurs de reconstruction du split validation.
+
+Résultats obtenus avec le seuil P95 :
+
+| Split | Images rejetées | Total | Taux de rejet |
+| ----- | --------------: | ----: | ------------: |
+| Validation | 4 | 65 | 6,15 % |
+| Test | 3 | 65 | 4,62 % |
+| OOD | 3 | 5 | 60,00 % |
+
+Détail des images OOD :
+
+| Image | Décision |
+| ----- | -------- |
+| `landscape.jpg` | Rejetée |
+| `random_object.jpg` | Rejetée |
+| `xray.jpg` | Rejetée |
+| `cat.jpg` | Acceptée |
+| `healthy_skin_or_other.jpg` | Acceptée |
+
+Artefacts :
+
+```text
+reports/ood/conv_autoencoder_latent-256_lr-0.0001_final/evaluation/
+```
+
+Ce dossier contient :
+
+- `ood_threshold.json` ;
+- `reconstruction_errors.csv` ;
+- `threshold_comparison.csv` ;
+- `reconstruction_error_distribution.png` ;
+- `reconstruction_error_boxplot.png`.
+
+### Évaluation par espace latent + GMM
+
+Une seconde approche a été ajoutée pour ne pas dépendre uniquement de l’erreur pixel.
+
+Script :
+
+```text
+scripts/evaluate_autoencoder_latent_gmm.py
+```
+
+Principe :
+
+1. extraire les embeddings latents avec `model.encode(image)` ;
+2. standardiser les latents avec `StandardScaler` ;
+3. entraîner un `GaussianMixture` sur les latents du train ;
+4. utiliser `- log_likelihood` comme score d’anomalie ;
+5. calibrer un seuil sur la validation.
+
+Commande retenue pour l’essai final :
+
+```bash
+python3 scripts/evaluate_autoencoder_latent_gmm.py \
+  --checkpoint models/conv_autoencoder_latent-256_lr-0.0001_final_best.pt \
+  --threshold-percentile 90 \
+  --gmm-components 7 \
+  --covariance-type diag \
+  --batch-size 16 \
+  --num-workers 0 \
+  --ood-dir data/ood \
+  --image-extensions .jpg,.jpeg
+```
+
+Résultats obtenus :
+
+| Split | Images rejetées | Total | Taux de rejet |
+| ----- | --------------: | ----: | ------------: |
+| Validation | 7 | 65 | 10,77 % |
+| Test | 9 | 65 | 13,85 % |
+| OOD | 3 | 5 | 60,00 % |
+
+Détail des images OOD :
+
+| Image | Décision |
+| ----- | -------- |
+| `xray.jpg` | Rejetée |
+| `random_object.jpg` | Rejetée |
+| `landscape.jpg` | Rejetée |
+| `cat.jpg` | Acceptée |
+| `healthy_skin_or_other.jpg` | Acceptée |
+
+Artefacts :
+
+```text
+reports/ood/conv_autoencoder_latent-256_lr-0.0001_final/evaluation_latent_gmm/
+```
+
+Ce dossier contient :
+
+- `latent_gmm_threshold.json` ;
+- `latent_gmm_scores.csv` ;
+- `latent_gmm_threshold_comparison.csv` ;
+- `latent_gmm_config_comparison_jpg_only.csv` ;
+- `latent_gmm_config_ood_details_jpg_only.csv` ;
+- `latent_gmm_score_distribution.png` ;
+- `latent_gmm_score_boxplot.png`.
+
+### Analyse des résultats OOD
+
+L’approche par erreur de reconstruction P95 est actuellement la plus simple et la plus défendable pour le pipeline principal :
+
+- elle rejette les OOD très éloignées du domaine (`landscape`, `xray`, `random_object`) ;
+- elle rejette peu d’images valides du split test ;
+- elle reste facile à expliquer dans le rapport.
+
+L’approche GMM latent est plus avancée, mais elle ne détecte pas davantage d’images OOD sur le petit jeu actuel. Elle rejette aussi plus d’images valides au seuil retenu. Elle est donc utile comme comparaison expérimentale, mais pas encore comme filtre principal.
+
+Les deux méthodes montrent une limite importante : `cat.jpg` et `healthy_skin_or_other.jpg` peuvent être acceptées. Cela indique que l’autoencoder seul ne suffit pas toujours pour une détection OOD robuste. Pour améliorer le système, il faudra ajouter davantage d’exemples OOD, ou combiner le score autoencoder avec des embeddings CNN.
+
+### Notebook d’analyse OOD
+
+Le notebook suivant synthétise les résultats et affiche les chemins des images OOD utilisées :
+
+```text
+notebooks/autoencoder_ood_analysis.ipynb
+```
+
+Il charge :
+
+- `reconstruction_errors.csv` ;
+- `ood_threshold.json` ;
+- les images de `data/ood/`.
+
+Il produit des tableaux par split, les taux de rejet, les chemins absolus/relatifs des images et une visualisation des OOD triées par erreur de reconstruction.
+
+---
+
+## Pipeline complet OOD + classification
+
+Le pipeline complet est disponible dans :
+
+```text
+core/pipeline.py
+scripts/analyze_image.py
+```
+
+Il suit cette logique :
+
+1. calculer le score OOD avec l’autoencoder ;
+2. comparer ce score au seuil sauvegardé ;
+3. rejeter l’image si elle est hors-domaine ;
+4. sinon, charger `models/resnet50_best.pt` et prédire la classe de plaie.
+
+Commande exemple pour une image du domaine :
+
+```bash
+python3 scripts/analyze_image.py \
+  --image "data/raw/Abrasions/abrasions (57).jpg" \
+  --cnn-checkpoint models/resnet50_best.pt \
+  --autoencoder-checkpoint models/conv_autoencoder_latent-256_lr-0.0001_final_best.pt \
+  --ood-threshold reports/ood/conv_autoencoder_latent-256_lr-0.0001_final/evaluation/ood_threshold.json \
+  --top-k 3 \
+  --json
+```
+
+Commande exemple pour une image OOD :
+
+```bash
+python3 scripts/analyze_image.py \
+  --image data/ood/xray.jpg \
+  --cnn-checkpoint models/resnet50_best.pt \
+  --autoencoder-checkpoint models/conv_autoencoder_latent-256_lr-0.0001_final_best.pt \
+  --ood-threshold reports/ood/conv_autoencoder_latent-256_lr-0.0001_final/evaluation/ood_threshold.json \
+  --top-k 3 \
+  --json
+```
+
+Si l’image est rejetée, aucune classification CNN n’est effectuée. Cela évite de produire une prédiction artificiellement confiante sur une image manifestement hors-domaine.
+
+---
+
 ## Commandes utiles
 
 ### Lancer l’entraînement CNN
@@ -706,17 +996,56 @@ streamlit run app-streamlit/Home.py
 python3 scripts/predict_image.py --checkpoint models/resnet50_best.pt --image data/raw/Burns/exemple.jpg --top-k 3
 ```
 
+### Entraîner l’autoencoder OOD
+
+```bash
+python -m scripts.train_autoencoder --epochs 100 --batch-size 16 --latent-dim 256 --lr 1e-4 --run-suffix final
+```
+
+### Évaluer le filtre OOD par reconstruction
+
+```bash
+python3 scripts/evaluate_autoencoder.py \
+  --checkpoint models/conv_autoencoder_latent-256_lr-0.0001_final_best.pt \
+  --threshold-percentile 95 \
+  --ood-dir data/ood
+```
+
+### Évaluer le filtre OOD par GMM latent
+
+```bash
+python3 scripts/evaluate_autoencoder_latent_gmm.py \
+  --checkpoint models/conv_autoencoder_latent-256_lr-0.0001_final_best.pt \
+  --threshold-percentile 90 \
+  --gmm-components 7 \
+  --covariance-type diag \
+  --ood-dir data/ood \
+  --image-extensions .jpg,.jpeg
+```
+
+### Lancer le pipeline complet
+
+```bash
+python3 scripts/analyze_image.py \
+  --image data/ood/xray.jpg \
+  --cnn-checkpoint models/resnet50_best.pt \
+  --autoencoder-checkpoint models/conv_autoencoder_latent-256_lr-0.0001_final_best.pt \
+  --ood-threshold reports/ood/conv_autoencoder_latent-256_lr-0.0001_final/evaluation/ood_threshold.json \
+  --top-k 3 \
+  --json
+```
+
 ---
 
 ## Prochaines étapes
 
 Les prochaines étapes du projet sont :
 
-1. intégrer `models/resnet50_best.pt` dans la page Streamlit de prédiction ;
-2. ajouter le filtre autoencoder/OOD avant la classification ;
-3. brancher la recherche par similarité visuelle sur les embeddings du ResNet50 ;
-4. ajouter Grad-CAM pour expliquer les prédictions du meilleur modèle ;
-5. exploiter les rapports d’évaluation test dans le rapport académique.
+1. intégrer le pipeline `OOD + ResNet50` dans la page Streamlit de prédiction ;
+2. brancher la recherche par similarité visuelle sur les embeddings du ResNet50 ;
+3. ajouter Grad-CAM pour expliquer les prédictions du meilleur modèle ;
+4. enrichir le jeu OOD avec davantage d’images variées ;
+5. exploiter les rapports CNN et OOD dans le rapport académique.
 
 ---
 
@@ -738,6 +1067,8 @@ Pour limiter ces risques, le projet utilise :
 - du rééquilibrage par échantillonnage ou pondération ;
 - une évaluation par classe ;
 - une analyse d’erreurs ;
+- un filtre OOD avant classification ;
+- une comparaison reconstruction pixel vs GMM latent ;
 - un suivi expérimental avec MLflow.
 
 ---
