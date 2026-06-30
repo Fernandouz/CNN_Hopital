@@ -954,6 +954,222 @@ Si l’image est rejetée, aucune classification CNN n’est effectuée. Cela é
 
 ---
 
+## Recherche par similarité visuelle
+
+La recherche par similarité est maintenant disponible côté backend.
+
+Elle repose sur :
+
+- `core/image_similarity.py` pour charger le meilleur CNN, extraire les embeddings et interroger ChromaDB ;
+- `scripts/build_similarity_index.py` pour construire l’index complet du dataset ;
+- `scripts/search_similar_images.py` pour rechercher les top-K images similaires à une image requête ;
+- `scripts/evaluate_similarity.py` pour évaluer la qualité de la recherche et générer des figures pour le rapport.
+
+Le modèle utilisé par défaut est :
+
+```text
+models/resnet50_best.pt
+```
+
+L’index est sauvegardé dans :
+
+```text
+data/processed/chroma/
+```
+
+Ce dossier ne doit pas être versionné. Il est déjà couvert par `.gitignore` via `data/processed/`.
+
+### Construire l’index ChromaDB
+
+Commande recommandée :
+
+```bash
+python3 scripts/build_similarity_index.py \
+  --checkpoint models/resnet50_best.pt \
+  --splits train,val,test \
+  --batch-size 32
+```
+
+Cette commande :
+
+1. lit les fichiers `train.csv`, `val.csv` et `test.csv` ;
+2. charge le modèle ResNet50 sauvegardé ;
+3. extrait un embedding CNN normalisé L2 pour chaque image ;
+4. indexe les embeddings dans ChromaDB avec distance cosinus ;
+5. écrit un résumé JSON dans `reports/similarity/index_summary.json`.
+
+Résultat obtenu :
+
+```text
+Images indexées : 431
+Documents dans ChromaDB : 431
+Architecture : resnet50
+Collection : wound_image_embeddings
+```
+
+Artefact utile pour le rapport :
+
+```text
+reports/similarity/index_summary.json
+```
+
+### Rechercher des images similaires
+
+Commande simple :
+
+```bash
+python3 scripts/search_similar_images.py \
+  --image "data/raw/Bruises/bruises (37).jpg" \
+  --checkpoint models/resnet50_best.pt \
+  --top-k 5
+```
+
+Commande recommandée pour une image déjà présente dans l’index :
+
+```bash
+python3 scripts/search_similar_images.py \
+  --image "data/raw/Bruises/bruises (37).jpg" \
+  --checkpoint models/resnet50_best.pt \
+  --top-k 5 \
+  --exclude-query
+```
+
+L’option `--exclude-query` retire l’image requête des résultats. Elle est importante pour l’évaluation et pour une interface Streamlit, car l’utilisateur veut voir des cas similaires différents de l’image uploadée.
+
+Sortie JSON exploitable par une interface :
+
+```bash
+python3 scripts/search_similar_images.py \
+  --image "data/raw/Bruises/bruises (37).jpg" \
+  --checkpoint models/resnet50_best.pt \
+  --top-k 5 \
+  --exclude-query \
+  --json
+```
+
+Chaque voisin retourné contient :
+
+- le rang ;
+- le chemin image ;
+- la classe ;
+- le score de similarité ;
+- la distance ChromaDB.
+
+### Générer une visualisation query + top-K
+
+Pour produire une figure directement exploitable dans le rapport :
+
+```bash
+python3 scripts/search_similar_images.py \
+  --image "data/raw/Bruises/bruises (37).jpg" \
+  --checkpoint models/resnet50_best.pt \
+  --top-k 5 \
+  --exclude-query \
+  --save-figure reports/similarity/query_topk_bruises_37.png
+```
+
+Figure générée :
+
+```text
+reports/similarity/query_topk_bruises_37.png
+```
+
+Cette figure affiche :
+
+- l’image requête ;
+- les top-K voisins ;
+- la classe de chaque voisin ;
+- le score de similarité.
+
+### Évaluer la recherche par similarité
+
+Commande recommandée sur le split test :
+
+```bash
+python3 scripts/evaluate_similarity.py \
+  --query-splits test \
+  --top-k 5 \
+  --num-figures 4
+```
+
+Cette évaluation exclut automatiquement l’image requête de ses propres voisins.
+
+Métriques produites :
+
+- top-1 accuracy ;
+- hit@K ;
+- precision@K moyenne ;
+- MRR ;
+- métriques par classe.
+
+Résultats obtenus sur le split test :
+
+| Métrique | Valeur |
+| -------- | -----: |
+| Nombre de requêtes | 65 |
+| Top-1 accuracy | 0,8769 |
+| Hit@5 | 0,9538 |
+| Precision@5 moyenne | 0,8615 |
+| MRR | 0,9103 |
+
+Artefacts générés :
+
+```text
+reports/similarity/evaluation/similarity_evaluation_summary.json
+reports/similarity/evaluation/similarity_evaluation_details.csv
+reports/similarity/evaluation/similarity_evaluation_by_class.csv
+reports/similarity/evaluation/figures/
+```
+
+Les figures `query_topk_*.png` peuvent être intégrées directement au rapport académique.
+
+### Utilisation dans Streamlit
+
+Pour brancher la similarité dans une page Streamlit, utiliser directement les fonctions du module `core.image_similarity`.
+
+Exemple minimal :
+
+```python
+from core.image_similarity import search_similar_images
+
+results = search_similar_images(
+    query_image_path=image_path,
+    checkpoint_path="models/resnet50_best.pt",
+    persist_dir="data/processed/chroma",
+    collection_name="wound_image_embeddings",
+    top_k=5,
+    exclude_image_path=image_path,
+)
+```
+
+Dans l’application Streamlit, il faut prévoir :
+
+1. vérifier que `data/processed/chroma/` existe ;
+2. si l’index est absent, afficher un message demandant de lancer `scripts/build_similarity_index.py` ;
+3. après une prédiction acceptée par le filtre OOD, appeler `search_similar_images` ;
+4. afficher les voisins avec `st.image`, leur classe et leur score ;
+5. rappeler que les voisins similaires ne constituent pas une preuve médicale.
+
+Commandes à exécuter avant de tester Streamlit avec la similarité :
+
+```bash
+pip install -r requirements.txt
+
+python3 scripts/build_similarity_index.py \
+  --checkpoint models/resnet50_best.pt \
+  --splits train,val,test \
+  --batch-size 32
+
+python3 scripts/evaluate_similarity.py \
+  --query-splits test \
+  --top-k 5 \
+  --num-figures 4
+
+streamlit run app-streamlit/Home.py
+```
+
+---
+
 ## Commandes utiles
 
 ### Lancer l’entraînement CNN
@@ -994,6 +1210,45 @@ streamlit run app-streamlit/Home.py
 
 ```bash
 python3 scripts/predict_image.py --checkpoint models/resnet50_best.pt --image data/raw/Burns/exemple.jpg --top-k 3
+```
+
+### Construire l’index de similarité visuelle
+
+```bash
+python3 scripts/build_similarity_index.py \
+  --checkpoint models/resnet50_best.pt \
+  --splits train,val,test \
+  --batch-size 32
+```
+
+### Rechercher les images similaires à une image requête
+
+```bash
+python3 scripts/search_similar_images.py \
+  --image "data/raw/Bruises/bruises (37).jpg" \
+  --checkpoint models/resnet50_best.pt \
+  --top-k 5 \
+  --exclude-query
+```
+
+### Générer une figure query + top-K
+
+```bash
+python3 scripts/search_similar_images.py \
+  --image "data/raw/Bruises/bruises (37).jpg" \
+  --checkpoint models/resnet50_best.pt \
+  --top-k 5 \
+  --exclude-query \
+  --save-figure reports/similarity/query_topk_bruises_37.png
+```
+
+### Évaluer la recherche par similarité
+
+```bash
+python3 scripts/evaluate_similarity.py \
+  --query-splits test \
+  --top-k 5 \
+  --num-figures 4
 ```
 
 ### Entraîner l’autoencoder OOD
@@ -1042,10 +1297,10 @@ python3 scripts/analyze_image.py \
 Les prochaines étapes du projet sont :
 
 1. intégrer le pipeline `OOD + ResNet50` dans la page Streamlit de prédiction ;
-2. brancher la recherche par similarité visuelle sur les embeddings du ResNet50 ;
+2. brancher dans Streamlit la recherche par similarité déjà disponible dans `core/image_similarity.py` ;
 3. ajouter Grad-CAM pour expliquer les prédictions du meilleur modèle ;
 4. enrichir le jeu OOD avec davantage d’images variées ;
-5. exploiter les rapports CNN et OOD dans le rapport académique.
+5. exploiter les rapports CNN, OOD et similarité dans le rapport académique.
 
 ---
 
