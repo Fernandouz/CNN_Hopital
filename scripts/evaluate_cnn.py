@@ -1,15 +1,20 @@
-from core.model_utils import build_model
-from core.data_processing import build_dataloaders, IMAGENET_MEAN, IMAGENET_STD
 from pathlib import Path
 import sys
 import argparse
 import json
+import os
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.append(str(PROJECT_ROOT))
+os.environ.setdefault("MPLCONFIGDIR", str(PROJECT_ROOT / ".matplotlib-cache"))
+
+import matplotlib
+matplotlib.use("Agg")
 
 import torch
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-
 from tqdm import tqdm
 from sklearn.metrics import (
     classification_report,
@@ -17,8 +22,8 @@ from sklearn.metrics import (
     accuracy_score,
 )
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.append(str(PROJECT_ROOT))
+from core.model_utils import build_model
+from core.data_processing import build_dataloaders, IMAGENET_MEAN, IMAGENET_STD
 
 
 def parse_args():

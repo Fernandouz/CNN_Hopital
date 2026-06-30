@@ -43,6 +43,7 @@ CNN_Hopital/
 │   ├── __init__.py
 │   ├── data_processing.py
 │   ├── model_utils.py
+│   ├── inference.py
 │   ├── autoencoder.py
 │   ├── grad_cam.py
 │   ├── image_similarity.py
@@ -68,6 +69,7 @@ CNN_Hopital/
 ├── scripts/
 │   ├── train_cnn.py
 │   ├── evaluate_cnn.py
+│   ├── predict_image.py
 │   └── drift_monitoring.py
 │
 ├── app-streamlit/
@@ -259,6 +261,18 @@ Architectures disponibles :
 
 `mobilenet_v3_large` ajoute une comparaison avec un modèle compact optimisé pour l’inférence rapide.  
 `custom_cnn` est une baseline simple entraînée from scratch, utile pour comparer les résultats avec les modèles pré-entraînés ImageNet.
+
+### `core/inference.py`
+
+Ce fichier centralise le chargement d’un checkpoint entraîné et la prédiction sur une image unique.
+
+Il fournit notamment :
+
+- la détection automatique du device disponible : `mps`, `cuda` ou `cpu` ;
+- le chargement du checkpoint PyTorch ;
+- la reconstruction du modèle avec l’architecture et le mapping de classes sauvegardés ;
+- les transformations d’inférence compatibles ImageNet ;
+- la fonction `predict_image`, qui retourne la classe prédite, la confiance et le top-K des classes.
 
 ---
 
@@ -510,6 +524,146 @@ L’objectif est d’éviter qu’un modèle obtienne une bonne accuracy globale
 
 ---
 
+## Modèle retenu et inférence
+
+Après comparaison des runs sur le jeu de validation, le modèle retenu est le **ResNet50 fine-tuné**.
+
+Le checkpoint original est :
+
+```text
+models/resnet50_pretrained-True_freeze-False_finetune-True_weighted-True_classweights-False_lr-1e-05_resnet50_finetune_final_100epochs_20260625_1618_best.pt
+```
+
+Une copie courte a été créée pour faciliter l’utilisation dans les scripts et l’interface :
+
+```text
+models/resnet50_best.pt
+```
+
+Ce fichier contient les poids du modèle, l’architecture, la taille d’image, le mapping des classes et les informations nécessaires pour reconstruire le modèle sans dépendre de l’ordre local des dossiers.
+
+### Résultats du meilleur modèle
+
+Sur validation, le ResNet50 fine-tuné est le meilleur modèle au macro-F1 :
+
+| Modèle | Validation accuracy | Validation macro-F1 |
+| ------ | ------------------: | ------------------: |
+| ResNet50 fine-tuné | 0.8615 | 0.8656 |
+| MobileNetV3-Large frozen | 0.8615 | 0.8477 |
+| ResNet50 frozen | 0.7538 | 0.7219 |
+
+L’évaluation finale sur le jeu de test donne :
+
+| Métrique | Valeur |
+| -------- | -----: |
+| Accuracy test | 0.8923 |
+| Macro precision test | 0.9005 |
+| Macro recall test | 0.8838 |
+| Macro-F1 test | 0.8898 |
+| Weighted-F1 test | 0.8919 |
+| Erreurs | 7 / 65 |
+
+Les artefacts de test sont sauvegardés dans :
+
+```text
+reports/evaluation/resnet50_pretrained-True_freeze-False_finetune-True_weighted-True_classweights-False_lr-1e-05_resnet50_finetune_final_100epochs_20260625_1618/test/
+```
+
+Ce dossier contient notamment :
+
+- `evaluation_summary.json` ;
+- `classification_report.csv` et `classification_report.json` ;
+- `confusion_matrix.png` ;
+- `predictions.csv` ;
+- `misclassified_examples.png`.
+
+### Charger le meilleur modèle en Python
+
+Exemple d’utilisation depuis la racine du projet :
+
+```python
+from core.inference import load_model_from_checkpoint
+
+model, checkpoint, device = load_model_from_checkpoint("models/resnet50_best.pt")
+
+print(checkpoint["architecture"])
+print(checkpoint["class_names"])
+print(device)
+```
+
+### Prédire une image en Python
+
+```python
+from core.inference import predict_image
+
+result = predict_image(
+    image_path="data/raw/Burns/exemple.jpg",
+    checkpoint_path="models/resnet50_best.pt",
+    top_k=3,
+)
+
+print(result["predicted_class"])
+print(result["confidence"])
+print(result["top_k"])
+```
+
+La fonction retourne un dictionnaire de ce type :
+
+```json
+{
+    "image_path": "data/raw/Burns/exemple.jpg",
+    "architecture": "resnet50",
+    "predicted_class": "Burns",
+    "confidence": 0.92,
+    "top_k": [
+        {"rank": 1, "class": "Burns", "probability": 0.92},
+        {"rank": 2, "class": "Cut", "probability": 0.05},
+        {"rank": 3, "class": "Laceration", "probability": 0.03}
+    ]
+}
+```
+
+### Prédire une image en ligne de commande
+
+Un script CLI a été ajouté :
+
+```text
+scripts/predict_image.py
+```
+
+Exemple avec affichage lisible :
+
+```bash
+python3 scripts/predict_image.py \
+  --checkpoint models/resnet50_best.pt \
+  --image data/raw/Burns/exemple.jpg \
+  --top-k 3
+```
+
+Exemple avec sortie JSON :
+
+```bash
+python3 scripts/predict_image.py \
+  --checkpoint models/resnet50_best.pt \
+  --image data/raw/Burns/exemple.jpg \
+  --top-k 3 \
+  --json
+```
+
+Le chemin d’image doit pointer vers une image existante du projet ou vers un chemin absolu.
+
+### Relancer l’évaluation du meilleur modèle
+
+```bash
+python3 scripts/evaluate_cnn.py \
+  --checkpoint models/resnet50_best.pt \
+  --split test \
+  --batch-size 16 \
+  --num-workers 0
+```
+
+---
+
 ## Commandes utiles
 
 ### Lancer l’entraînement CNN
@@ -546,19 +700,23 @@ http://localhost:5000
 streamlit run app-streamlit/Home.py
 ```
 
+### Prédire une image avec le meilleur modèle
+
+```bash
+python3 scripts/predict_image.py --checkpoint models/resnet50_best.pt --image data/raw/Burns/exemple.jpg --top-k 3
+```
+
 ---
 
 ## Prochaines étapes
 
 Les prochaines étapes du projet sont :
 
-1. lancer les runs ResNet50, EfficientNet-B0, MobileNetV3-Large et `custom_cnn` ;
-2. comparer les résultats dans MLflow ;
-3. produire les courbes d’entraînement ;
-4. générer les matrices de confusion ;
-5. analyser les erreurs de classification ;
-6. sélectionner le meilleur modèle ;
-7. passer ensuite à l’autoencoder pour la détection hors-domaine.
+1. intégrer `models/resnet50_best.pt` dans la page Streamlit de prédiction ;
+2. ajouter le filtre autoencoder/OOD avant la classification ;
+3. brancher la recherche par similarité visuelle sur les embeddings du ResNet50 ;
+4. ajouter Grad-CAM pour expliquer les prédictions du meilleur modèle ;
+5. exploiter les rapports d’évaluation test dans le rapport académique.
 
 ---
 
