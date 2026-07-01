@@ -2,9 +2,11 @@ from pathlib import Path
 import sys
 import argparse
 import json
+import os
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(PROJECT_ROOT))
+os.environ.setdefault("MPLCONFIGDIR", str(PROJECT_ROOT / ".matplotlib-cache"))
 
 from core.pipeline import analyze_image
 
@@ -55,6 +57,33 @@ def parse_args():
         help="Afficher la sortie complète au format JSON."
     )
 
+    parser.add_argument(
+        "--include-grad-cam",
+        action="store_true",
+        help="Générer une explication Grad-CAM si l'image est acceptée par le filtre OOD."
+    )
+
+    parser.add_argument(
+        "--grad-cam-output-dir",
+        type=str,
+        default="reports/xai/pipeline",
+        help="Dossier de sortie des images Grad-CAM."
+    )
+
+    parser.add_argument(
+        "--grad-cam-target-class",
+        type=str,
+        default=None,
+        help="Classe cible Grad-CAM. Par défaut, utilise la classe prédite."
+    )
+
+    parser.add_argument(
+        "--grad-cam-alpha",
+        type=float,
+        default=0.45,
+        help="Poids visuel de la heatmap dans la superposition."
+    )
+
     return parser.parse_args()
 
 
@@ -74,6 +103,10 @@ def main():
         autoencoder_checkpoint_path=resolve_path(args.autoencoder_checkpoint),
         ood_threshold_path=resolve_path(args.ood_threshold),
         top_k=args.top_k,
+        include_grad_cam=args.include_grad_cam,
+        grad_cam_output_dir=resolve_path(args.grad_cam_output_dir),
+        grad_cam_target_class=args.grad_cam_target_class,
+        grad_cam_alpha=args.grad_cam_alpha,
     )
 
     if args.json:
@@ -110,6 +143,13 @@ def main():
             f"{pred['rank']}. {pred['class']} "
             f"— {pred['probability']:.4f}"
         )
+
+    if result["grad_cam"] is not None:
+        grad_cam = result["grad_cam"]
+        print("\nExplicabilité Grad-CAM")
+        print("-" * 50)
+        print(f"Classe cible : {grad_cam['target_class']}")
+        print(f"Overlay : {grad_cam['overlay_path']}")
 
 
 if __name__ == "__main__":

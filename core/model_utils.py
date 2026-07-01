@@ -2,6 +2,15 @@ import torch.nn as nn
 from torchvision import models
 
 
+SUPPORTED_ARCHITECTURES = [
+    "custom_cnn",
+    "vgg16",
+    "resnet50",
+    "efficientnet_b0",
+    "mobilenet_v3_large",
+]
+
+
 class CustomCNN(nn.Module):
     """
     Petit CNN entraînable from scratch.

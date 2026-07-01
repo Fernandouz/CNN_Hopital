@@ -10,6 +10,96 @@ from torchvision.transforms import InterpolationMode
 
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_RAW_DIR = PROJECT_ROOT / "data" / "raw"
+SUPPORTED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+
+
+def resolve_project_path(path, project_root=None):
+    """Convertit un chemin de CSV/notebook en chemin absolu du projet."""
+    project_root = Path(project_root) if project_root is not None else PROJECT_ROOT
+    path = Path(path)
+
+    if path.is_absolute():
+        return path
+
+    path_text = path.as_posix()
+    if path_text.startswith("../data/"):
+        return project_root / path_text.replace("../data/", "data/", 1)
+
+    return project_root / path
+
+
+def build_dataframe(raw_dir=DEFAULT_RAW_DIR):
+    """
+    Inventorie les images du dataset brut.
+
+    Les colonnes historiques `classe` et `filepath` sont conservees pour les
+    pages Streamlit, en plus des colonnes `class` et `path` utilisees par les
+    scripts d'entrainement.
+    """
+    raw_dir = Path(raw_dir)
+    rows = []
+
+    if not raw_dir.exists():
+        return pd.DataFrame(
+            columns=[
+                "path",
+                "class",
+                "filepath",
+                "classe",
+                "filename",
+                "extension",
+                "width",
+                "height",
+                "mode",
+                "ratio",
+                "file_size_kb",
+            ]
+        )
+
+    for class_dir in sorted(path for path in raw_dir.iterdir() if path.is_dir()):
+        if class_dir.name.startswith("."):
+            continue
+
+        for image_path in sorted(class_dir.iterdir()):
+            if image_path.suffix.lower() not in SUPPORTED_IMAGE_EXTENSIONS:
+                continue
+
+            try:
+                with Image.open(image_path) as image:
+                    width, height = image.size
+                    mode = image.mode
+            except OSError:
+                continue
+
+            file_size_kb = image_path.stat().st_size / 1024
+            rows.append(
+                {
+                    "path": str(image_path),
+                    "class": class_dir.name,
+                    "filepath": str(image_path),
+                    "classe": class_dir.name,
+                    "filename": image_path.name,
+                    "extension": image_path.suffix.lower(),
+                    "width": width,
+                    "height": height,
+                    "mode": mode,
+                    "ratio": width / height if height else None,
+                    "file_size_kb": file_size_kb,
+                }
+            )
+
+    return pd.DataFrame(rows)
+
+
+def class_distribution(dataframe):
+    """Retourne le nombre d'images par classe."""
+    if dataframe.empty:
+        return pd.Series(dtype="int64")
+
+    class_column = "classe" if "classe" in dataframe.columns else "class"
+    return dataframe[class_column].value_counts().sort_index()
 
 
 class WoundDataset(Dataset):

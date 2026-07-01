@@ -45,7 +45,9 @@ CNN_Hopital/
 │   ├── model_utils.py
 │   ├── inference.py
 │   ├── autoencoder.py
+│   ├── vae.py
 │   ├── ood_detection.py
+│   ├── vae_ood_detection.py
 │   ├── pipeline.py
 │   ├── grad_cam.py
 │   ├── image_similarity.py
@@ -82,6 +84,9 @@ CNN_Hopital/
 │   ├── train_autoencoder.py
 │   ├── evaluate_autoencoder.py
 │   ├── evaluate_autoencoder_latent_gmm.py
+│   ├── train_vae.py
+│   ├── evaluate_vae_ood.py
+│   ├── generate_grad_cam_report.py
 │   ├── analyze_image.py
 │   └── drift_monitoring.py
 │
@@ -91,7 +96,6 @@ CNN_Hopital/
 │       ├── 1_Dataset_Explorer.py
 │       ├── 2_Training.py
 │       ├── 3_Prediction.py
-│       ├── 4_Explainability.py
 │       └── 5_AI_Assistant.py
 │
 ├── models/
@@ -324,7 +328,10 @@ Ce fichier assemble le pipeline complet :
 
 1. détection OOD par autoencoder ;
 2. rejet de l’image si elle dépasse le seuil ;
-3. classification CNN uniquement si l’image est acceptée.
+3. classification CNN uniquement si l’image est acceptée ;
+4. génération optionnelle d’une explication Grad-CAM si `include_grad_cam=True`.
+
+La sortie est directement exploitable côté Streamlit : si l’image est rejetée, `prediction` et `grad_cam` valent `None`; si elle est acceptée, `prediction` contient la classe et le top-K, et `grad_cam` contient le chemin PNG de l’overlay Grad-CAM à afficher.
 
 ---
 
@@ -356,6 +363,14 @@ Le script gère :
 - la sauvegarde de l’historique d’entraînement ;
 - le suivi expérimental avec MLflow.
 
+Les runs CNN sont regroupés dans l’experiment MLflow :
+
+```text
+wound-classification-app
+```
+
+Le même script est utilisé par la page Streamlit `2_Training.py`. L’application construit une commande équivalente à `python -m scripts.train_cnn` à partir des paramètres choisis dans l’interface.
+
 Exemples :
 
 ```bash
@@ -377,13 +392,13 @@ La stratégie retenue consiste donc à comparer plusieurs familles de modèles c
 
 ### Architectures retenues
 
-| Architecture      | Nom dans le code        | Rôle dans l’étude          | Justification                                                            |
-| ----------------- | ----------------------- | -------------------------- | ------------------------------------------------------------------------ |
-| VGG16             | `vgg16`                 | Baseline classique         | Architecture CNN historique, simple à interpréter, utile comme référence |
-| ResNet50          | `resnet50`              | Modèle central             | Architecture résiduelle robuste, explicitement suggérée dans le sujet    |
-| EfficientNet-B0   | `efficientnet_b0`       | Modèle moderne compact     | Bon compromis entre performance, nombre de paramètres et coût de calcul  |
-| MobileNetV3-Large | `mobilenet_v3_large`    | Modèle léger pour l’app    | Inférence rapide, adaptée à une interface Streamlit interactive          |
-| CNN custom        | `custom_cnn`            | Baseline from scratch      | Référence pédagogique sans poids ImageNet                                |
+| Architecture      | Nom dans le code     | Rôle dans l’étude       | Justification                                                            |
+| ----------------- | -------------------- | ----------------------- | ------------------------------------------------------------------------ |
+| VGG16             | `vgg16`              | Baseline classique      | Architecture CNN historique, simple à interpréter, utile comme référence |
+| ResNet50          | `resnet50`           | Modèle central          | Architecture résiduelle robuste, explicitement suggérée dans le sujet    |
+| EfficientNet-B0   | `efficientnet_b0`    | Modèle moderne compact  | Bon compromis entre performance, nombre de paramètres et coût de calcul  |
+| MobileNetV3-Large | `mobilenet_v3_large` | Modèle léger pour l’app | Inférence rapide, adaptée à une interface Streamlit interactive          |
+| CNN custom        | `custom_cnn`         | Baseline from scratch   | Référence pédagogique sans poids ImageNet                                |
 
 ### Positionnement des architectures
 
@@ -550,6 +565,20 @@ Pour chaque run, les éléments suivants devront être enregistrés :
 
 L’interface MLflow permettra de comparer les modèles et d’identifier le meilleur compromis entre performance globale et performance sur les classes minoritaires.
 
+Les runs CNN lancés depuis le CLI ou depuis Streamlit sont regroupés dans l’experiment :
+
+```text
+wound-classification-app
+```
+
+Le backend MLflow utilisé par le projet est :
+
+```text
+sqlite:///mlflow.db
+```
+
+Depuis l’application Streamlit, MLflow est démarré automatiquement sur `127.0.0.1:5001` au lancement d’un entraînement. Le process MLflow lancé par l’app est arrêté automatiquement lorsque le serveur Streamlit se ferme normalement.
+
 ---
 
 ## Évaluation attendue des modèles
@@ -598,22 +627,22 @@ Ce fichier contient les poids du modèle, l’architecture, la taille d’image,
 
 Sur validation, le ResNet50 fine-tuné est le meilleur modèle au macro-F1 :
 
-| Modèle | Validation accuracy | Validation macro-F1 |
-| ------ | ------------------: | ------------------: |
-| ResNet50 fine-tuné | 0.8615 | 0.8656 |
-| MobileNetV3-Large frozen | 0.8615 | 0.8477 |
-| ResNet50 frozen | 0.7538 | 0.7219 |
+| Modèle                   | Validation accuracy | Validation macro-F1 |
+| ------------------------ | ------------------: | ------------------: |
+| ResNet50 fine-tuné       |              0.8615 |              0.8656 |
+| MobileNetV3-Large frozen |              0.8615 |              0.8477 |
+| ResNet50 frozen          |              0.7538 |              0.7219 |
 
 L’évaluation finale sur le jeu de test donne :
 
-| Métrique | Valeur |
-| -------- | -----: |
-| Accuracy test | 0.8923 |
+| Métrique             | Valeur |
+| -------------------- | -----: |
+| Accuracy test        | 0.8923 |
 | Macro precision test | 0.9005 |
-| Macro recall test | 0.8838 |
-| Macro-F1 test | 0.8898 |
-| Weighted-F1 test | 0.8919 |
-| Erreurs | 7 / 65 |
+| Macro recall test    | 0.8838 |
+| Macro-F1 test        | 0.8898 |
+| Weighted-F1 test     | 0.8919 |
+| Erreurs              | 7 / 65 |
 
 Les artefacts de test sont sauvegardés dans :
 
@@ -663,15 +692,15 @@ La fonction retourne un dictionnaire de ce type :
 
 ```json
 {
-    "image_path": "data/raw/Burns/exemple.jpg",
-    "architecture": "resnet50",
-    "predicted_class": "Burns",
-    "confidence": 0.92,
-    "top_k": [
-        {"rank": 1, "class": "Burns", "probability": 0.92},
-        {"rank": 2, "class": "Cut", "probability": 0.05},
-        {"rank": 3, "class": "Laceration", "probability": 0.03}
-    ]
+  "image_path": "data/raw/Burns/exemple.jpg",
+  "architecture": "resnet50",
+  "predicted_class": "Burns",
+  "confidence": 0.92,
+  "top_k": [
+    { "rank": 1, "class": "Burns", "probability": 0.92 },
+    { "rank": 2, "class": "Cut", "probability": 0.05 },
+    { "rank": 3, "class": "Laceration", "probability": 0.03 }
+  ]
 }
 ```
 
@@ -784,20 +813,20 @@ Le seuil est calibré sur le percentile 95 des erreurs de reconstruction du spli
 
 Résultats obtenus avec le seuil P95 :
 
-| Split | Images rejetées | Total | Taux de rejet |
-| ----- | --------------: | ----: | ------------: |
-| Validation | 4 | 65 | 6,15 % |
-| Test | 3 | 65 | 4,62 % |
-| OOD | 3 | 5 | 60,00 % |
+| Split      | Images rejetées | Total | Taux de rejet |
+| ---------- | --------------: | ----: | ------------: |
+| Validation |               4 |    65 |        6,15 % |
+| Test       |               3 |    65 |        4,62 % |
+| OOD        |               3 |     5 |       60,00 % |
 
 Détail des images OOD :
 
-| Image | Décision |
-| ----- | -------- |
-| `landscape.jpg` | Rejetée |
-| `random_object.jpg` | Rejetée |
-| `xray.jpg` | Rejetée |
-| `cat.jpg` | Acceptée |
+| Image                       | Décision |
+| --------------------------- | -------- |
+| `landscape.jpg`             | Rejetée  |
+| `random_object.jpg`         | Rejetée  |
+| `xray.jpg`                  | Rejetée  |
+| `cat.jpg`                   | Acceptée |
 | `healthy_skin_or_other.jpg` | Acceptée |
 
 Artefacts :
@@ -848,20 +877,20 @@ python3 scripts/evaluate_autoencoder_latent_gmm.py \
 
 Résultats obtenus :
 
-| Split | Images rejetées | Total | Taux de rejet |
-| ----- | --------------: | ----: | ------------: |
-| Validation | 7 | 65 | 10,77 % |
-| Test | 9 | 65 | 13,85 % |
-| OOD | 3 | 5 | 60,00 % |
+| Split      | Images rejetées | Total | Taux de rejet |
+| ---------- | --------------: | ----: | ------------: |
+| Validation |               7 |    65 |       10,77 % |
+| Test       |               9 |    65 |       13,85 % |
+| OOD        |               3 |     5 |       60,00 % |
 
 Détail des images OOD :
 
-| Image | Décision |
-| ----- | -------- |
-| `xray.jpg` | Rejetée |
-| `random_object.jpg` | Rejetée |
-| `landscape.jpg` | Rejetée |
-| `cat.jpg` | Acceptée |
+| Image                       | Décision |
+| --------------------------- | -------- |
+| `xray.jpg`                  | Rejetée  |
+| `random_object.jpg`         | Rejetée  |
+| `landscape.jpg`             | Rejetée  |
+| `cat.jpg`                   | Acceptée |
 | `healthy_skin_or_other.jpg` | Acceptée |
 
 Artefacts :
@@ -891,6 +920,200 @@ L’approche par erreur de reconstruction P95 est actuellement la plus simple et
 L’approche GMM latent est plus avancée, mais elle ne détecte pas davantage d’images OOD sur le petit jeu actuel. Elle rejette aussi plus d’images valides au seuil retenu. Elle est donc utile comme comparaison expérimentale, mais pas encore comme filtre principal.
 
 Les deux méthodes montrent une limite importante : `cat.jpg` et `healthy_skin_or_other.jpg` peuvent être acceptées. Cela indique que l’autoencoder seul ne suffit pas toujours pour une détection OOD robuste. Pour améliorer le système, il faudra ajouter davantage d’exemples OOD, ou combiner le score autoencoder avec des embeddings CNN.
+
+### Amélioration avec Variational Autoencoder
+
+Une extension VAE a été ajoutée pour améliorer l’analyse hors-domaine avec une structure latente probabiliste.
+
+Fichiers ajoutés :
+
+```text
+core/vae.py
+core/vae_ood_detection.py
+scripts/train_vae.py
+scripts/evaluate_vae_ood.py
+```
+
+Contrairement à l’autoencoder classique, le VAE encode chaque image sous la forme d’une distribution latente :
+
+```text
+image -> encodeur -> mu, logvar -> z -> decodeur -> reconstruction
+```
+
+La fonction de perte combine :
+
+```text
+loss = reconstruction_loss + beta * KL_divergence
+```
+
+Scores OOD disponibles :
+
+- `reconstruction` : erreur MSE entre image originale et reconstruction ;
+- `kl` : divergence KL de la distribution latente ;
+- `combined` : `reconstruction_error + alpha * kl_divergence`.
+
+Commande de debug rapide :
+
+```bash
+python3 scripts/train_vae.py \
+  --epochs 1 \
+  --batch-size 4 \
+  --latent-dim 32 \
+  --beta 0.001 \
+  --run-suffix debug_smoke \
+  --max-train-batches 1 \
+  --max-eval-batches 1
+```
+
+Commande recommandée pour un entraînement exploitable :
+
+```bash
+python3 scripts/train_vae.py \
+  --epochs 100 \
+  --batch-size 16 \
+  --latent-dim 256 \
+  --beta 0.001 \
+  --lr 1e-4 \
+  --patience 10 \
+  --run-suffix final
+```
+
+Le checkpoint sera sauvegardé dans :
+
+```text
+models/conv_vae_latent-256_beta-0.001_lr-0.0001_final_best.pt
+```
+
+Les courbes et exemples de reconstruction seront sauvegardés dans :
+
+```text
+reports/ood/conv_vae_latent-256_beta-0.001_lr-0.0001_final/
+```
+
+Évaluation recommandée avec score combiné :
+
+```bash
+python3 scripts/evaluate_vae_ood.py \
+  --checkpoint models/conv_vae_latent-256_beta-0.001_lr-0.0001_final_best.pt \
+  --threshold-percentile 95 \
+  --score combined \
+  --alpha 0.001 \
+  --batch-size 16 \
+  --ood-dir data/ood \
+  --image-extensions .jpg,.jpeg
+```
+
+Évaluations comparatives utiles :
+
+```bash
+python3 scripts/evaluate_vae_ood.py \
+  --checkpoint models/conv_vae_latent-256_beta-0.001_lr-0.0001_final_best.pt \
+  --threshold-percentile 95 \
+  --score reconstruction \
+  --batch-size 16 \
+  --ood-dir data/ood \
+  --image-extensions .jpg,.jpeg
+
+python3 scripts/evaluate_vae_ood.py \
+  --checkpoint models/conv_vae_latent-256_beta-0.001_lr-0.0001_final_best.pt \
+  --threshold-percentile 95 \
+  --score kl \
+  --batch-size 16 \
+  --ood-dir data/ood \
+  --image-extensions .jpg,.jpeg
+```
+
+Artefacts générés :
+
+```text
+reports/ood/conv_vae_latent-256_beta-0.001_lr-0.0001_final/evaluation_combined/
+├── vae_ood_scores.csv
+├── vae_ood_threshold.json
+├── vae_combined_score_distribution.png
+├── vae_combined_score_boxplot.png
+└── vae_reconstruction_examples.png
+```
+
+Pour brancher le VAE dans Streamlit ou dans le pipeline, utiliser :
+
+```python
+from core.vae_ood_detection import detect_ood_vae
+
+ood_result = detect_ood_vae(
+    image_path=image_path,
+    vae_checkpoint_path="models/conv_vae_latent-256_beta-0.001_lr-0.0001_final_best.pt",
+    threshold_path="reports/ood/conv_vae_latent-256_beta-0.001_lr-0.0001_final/evaluation_combined/vae_ood_threshold.json",
+)
+```
+
+Le résultat contient :
+
+- `is_ood` ;
+- `anomaly_score` ;
+- `threshold` ;
+- `reconstruction_error` ;
+- `kl_divergence` ;
+- `score` ;
+- `decision`.
+
+### Conclusion expérimentale sur le VAE
+
+Le VAE a été testé comme amélioration probabiliste de l’autoencoder, mais les résultats obtenus ne justifient pas son utilisation comme filtre OOD principal.
+
+Deux runs principaux ont été observés :
+
+```text
+conv_vae_latent-256_beta-0.001_lr-0.0001_final
+conv_vae_latent-256_beta-0.001_lr-0.0001_final_patience40
+```
+
+Même avec une patience plus élevée, le VAE n’améliore pas la reconstruction. Le meilleur modèle apparaît tôt, puis la validation se dégrade.
+
+Comparaison des pertes validation :
+
+| Modèle                 | Meilleure epoch | Meilleure val loss |
+| ---------------------- | --------------: | -----------------: |
+| Autoencoder classique  |              61 |            0,01391 |
+| VAE `final`            |               9 |            0,06790 |
+| VAE `final_patience40` |              10 |            0,06697 |
+
+L’écart est important : le VAE reconstruit environ 5 fois moins bien que l’autoencoder classique.
+
+La comparaison qualitative confirme ce résultat. L’autoencoder produit des reconstructions floues mais encore structurées, tandis que le VAE produit principalement des images moyennes grisâtres, avec très peu de détails utiles.
+
+Statistiques mesurées sur un batch de validation :
+
+| Élément                | Moyenne reconstruction | Écart-type reconstruction |
+| ---------------------- | ---------------------: | ------------------------: |
+| Images originales      |                 0,5726 |                    0,2502 |
+| Autoencoder classique  |                 0,5689 |                    0,2216 |
+| VAE `final_patience40` |                 0,5290 |                    0,0374 |
+
+L’écart-type très faible du VAE montre que ses reconstructions sont presque constantes. Le modèle tend donc vers une solution dégénérée : au lieu de reconstruire chaque image, il génère une moyenne visuelle du dataset.
+
+Comparaison OOD :
+
+| Méthode                         | Seuil |    Test rejeté |    OOD rejeté |
+| ------------------------------- | ----- | -------------: | ------------: |
+| Autoencoder reconstruction      | P95   |  3/65 = 4,62 % | 3/5 = 60,00 % |
+| VAE KL `final_patience40`       | P95   |  4/65 = 6,15 % | 1/5 = 20,00 % |
+| VAE combined `final_patience40` | P95   | 9/65 = 13,85 % | 1/5 = 20,00 % |
+
+Le VAE est donc moins performant sur les deux objectifs :
+
+- il rejette plus d’images valides du split test ;
+- il détecte moins d’images hors-domaine ;
+- il produit des reconstructions trop pauvres pour être interprétables ;
+- il est moins stable que l’autoencoder classique.
+
+Conclusion retenue pour le projet :
+
+```text
+Filtre OOD principal : autoencoder convolutionnel classique avec seuil P95
+VAE : expérimentation comparative avancée, non retenue pour le pipeline final
+```
+
+> Un Variational Autoencoder a été testé afin d’ajouter une modélisation probabiliste de l’espace latent et d’améliorer l’estimation de l’incertitude. Cependant, sur ce dataset limité, le VAE n’a pas permis d’obtenir des reconstructions exploitables. Les sorties générées sont fortement lissées et proches d’une image moyenne, ce qui entraîne une erreur de reconstruction élevée et une séparation insuffisante entre images du domaine et images hors-domaine. En comparaison, l’autoencoder convolutionnel classique obtient une meilleure reconstruction et un meilleur taux de rejet OOD. Le VAE est donc conservé comme expérimentation comparative, mais le filtre OOD principal reste l’autoencoder classique.
 
 ### Notebook d’analyse OOD
 
@@ -924,7 +1147,8 @@ Il suit cette logique :
 1. calculer le score OOD avec l’autoencoder ;
 2. comparer ce score au seuil sauvegardé ;
 3. rejeter l’image si elle est hors-domaine ;
-4. sinon, charger `models/resnet50_best.pt` et prédire la classe de plaie.
+4. sinon, charger `models/resnet50_best.pt` et prédire la classe de plaie ;
+5. optionnellement, générer l’explication Grad-CAM pour la prédiction.
 
 Commande exemple pour une image du domaine :
 
@@ -937,6 +1161,71 @@ python3 scripts/analyze_image.py \
   --top-k 3 \
   --json
 ```
+
+Commande exemple avec explicabilité Grad-CAM activée :
+
+```bash
+python3 scripts/analyze_image.py \
+  --image "data/raw/Abrasions/abrasions (57).jpg" \
+  --cnn-checkpoint models/resnet50_best.pt \
+  --autoencoder-checkpoint models/conv_autoencoder_latent-256_lr-0.0001_final_best.pt \
+  --ood-threshold reports/ood/conv_autoencoder_latent-256_lr-0.0001_final/evaluation/ood_threshold.json \
+  --top-k 3 \
+  --include-grad-cam \
+  --json
+```
+
+Dans ce cas, si l’image est acceptée par le filtre OOD, la sortie contient aussi :
+
+```json
+{
+  "grad_cam": {
+    "target_class": "Abrasions",
+    "target_class_idx": 0,
+    "alpha": 0.45,
+    "overlay_path": "reports/xai/pipeline/abrasions (57)_gradcam_overlay.png"
+  }
+}
+```
+
+Pour une image rejetée comme hors-domaine, `grad_cam` reste à `null`, car le modèle CNN ne doit pas expliquer une prédiction qui n’a pas été acceptée.
+
+Le pipeline interactif ne sauvegarde volontairement que l’overlay Grad-CAM. Les images originale et heatmap seule restent générées par `scripts/generate_grad_cam_report.py`, qui sert au rapport académique.
+
+### Utilisation du pipeline avec Grad-CAM dans Streamlit
+
+L’application Streamlit peut appeler directement `core.pipeline.analyze_image` :
+
+```python
+from core.pipeline import analyze_image
+
+result = analyze_image(
+    image_path=image_path,
+    cnn_checkpoint_path="models/resnet50_best.pt",
+    autoencoder_checkpoint_path="models/conv_autoencoder_latent-256_lr-0.0001_final_best.pt",
+    ood_threshold_path="reports/ood/conv_autoencoder_latent-256_lr-0.0001_final/evaluation/ood_threshold.json",
+    top_k=3,
+    include_grad_cam=True,
+    grad_cam_output_dir="reports/xai/pipeline",
+)
+
+if result["status"] == "accepted":
+    prediction = result["prediction"]
+    grad_cam = result["grad_cam"]
+    # Afficher prediction["predicted_class"], prediction["top_k"]
+    # Afficher grad_cam["overlay_path"] avec st.image(...)
+else:
+    # Afficher result["ood"]["decision"] et ne pas afficher de Grad-CAM.
+    pass
+```
+
+Le champ le plus utile côté interface est :
+
+```text
+result["grad_cam"]["overlay_path"]
+```
+
+Il pointe vers l’image superposée heatmap + image originale, prête à être affichée.
 
 Commande exemple pour une image OOD :
 
@@ -1104,13 +1393,13 @@ Métriques produites :
 
 Résultats obtenus sur le split test :
 
-| Métrique | Valeur |
-| -------- | -----: |
-| Nombre de requêtes | 65 |
-| Top-1 accuracy | 0,8769 |
-| Hit@5 | 0,9538 |
+| Métrique            | Valeur |
+| ------------------- | -----: |
+| Nombre de requêtes  |     65 |
+| Top-1 accuracy      | 0,8769 |
+| Hit@5               | 0,9538 |
 | Precision@5 moyenne | 0,8615 |
-| MRR | 0,9103 |
+| MRR                 | 0,9103 |
 
 Artefacts générés :
 
@@ -1142,7 +1431,7 @@ results = search_similar_images(
 )
 ```
 
-Dans l’application Streamlit, il faut prévoir :
+Dans l’application Streamlit, la page Prediction intègre maintenant cette logique :
 
 1. vérifier que `data/processed/chroma/` existe ;
 2. si l’index est absent, afficher un message demandant de lancer `scripts/build_similarity_index.py` ;
@@ -1170,6 +1459,257 @@ streamlit run app-streamlit/Home.py
 
 ---
 
+## Interface Streamlit
+
+L’application Streamlit se lance depuis la racine du projet :
+
+```bash
+streamlit run app-streamlit/Home.py
+```
+
+Pages disponibles :
+
+| Page | Fichier | Rôle |
+| ---- | ------- | ---- |
+| Accueil | `app-streamlit/Home.py` | Statistiques clés, navigation et rappel pédagogique |
+| Dataset Explorer | `app-streamlit/pages/1_Dataset_Explorer.py` | Distribution des classes et inspection du dataset |
+| Training | `app-streamlit/pages/2_Training.py` | Configuration et lancement de `python -m scripts.train_cnn` |
+| Prediction | `app-streamlit/pages/3_Prediction.py` | Upload image, OOD, classification, Grad-CAM et similarité |
+| AI Assistant | `app-streamlit/pages/5_AI_Assistant.py` | Page réservée à l’assistant RAG si activé |
+
+### Page Training
+
+La page Training expose les principaux paramètres du script `scripts/train_cnn.py` :
+
+- architecture : `resnet50`, `efficientnet_b0`, `mobilenet_v3_large`, `vgg16`, `custom_cnn` ;
+- nombre d’epochs ;
+- batch size ;
+- taille d’image ;
+- learning rate ;
+- weight decay ;
+- dropout ;
+- patience d’early stopping ;
+- nombre de workers ;
+- pré-entraînement ImageNet ;
+- gel du backbone ;
+- fine-tuning ;
+- `WeightedRandomSampler` ;
+- poids de classes ;
+- suffixe de run MLflow.
+
+Au lancement, l’app utilise l’interpréteur `.venv/bin/python` s’il existe, ajoute la racine du projet au `PYTHONPATH`, affiche les logs d’entraînement dans un terminal compact, puis écrit le run dans l’experiment MLflow `wound-classification-app`.
+
+MLflow est démarré automatiquement sur :
+
+```text
+http://127.0.0.1:5001
+```
+
+L’app affiche aussi les experiments détectés dans `mlflow.db` et un lien direct vers l’experiment CNN.
+
+### Page Prediction
+
+La page Prediction conserve le dernier résultat dans `st.session_state` pendant la session Streamlit. L’image uploadée, la prédiction, le statut OOD, l’overlay Grad-CAM et les cas similaires restent donc visibles lorsque l’utilisateur change de page puis revient.
+
+Le pipeline affiché est :
+
+```text
+upload image
+  -> détection OOD
+  -> classification CNN si image acceptée
+  -> top-3 prédictions
+  -> overlay Grad-CAM sous l’image uploadée
+  -> cas historiques similaires si l’index ChromaDB est disponible
+```
+
+L’ancienne page Explainability a été retirée temporairement : l’explicabilité utile à l’utilisateur est maintenant directement intégrée dans la page Prediction, juste sous la photo uploadée.
+
+---
+
+## Explicabilité visuelle avec Grad-CAM
+
+La partie 6 du projet ajoute une brique d’explicabilité visuelle pour comprendre quelles zones de l’image influencent la prédiction du CNN.
+
+L’objectif n’est pas de produire une preuve médicale, mais de vérifier si le modèle semble se concentrer sur la plaie ou sur des éléments périphériques comme l’arrière-plan, la peau saine, les artefacts d’image ou les marques d’eau.
+
+### Principe général
+
+Le pipeline Grad-CAM s’enchaîne ainsi :
+
+```text
+checkpoint CNN entraîné
+        ↓
+core/grad_cam.py
+        ↓
+scripts/generate_grad_cam_report.py
+        ↓
+reports/xai/resnet50/test/
+        ↓
+figures + CSV + JSON exploitables dans le rapport
+```
+
+Le checkpoint utilisé par défaut est :
+
+```text
+models/resnet50_best.pt
+```
+
+Ce modèle correspond au ResNet50 fine-tuné, retenu comme modèle principal pour l’analyse XAI.
+
+### Module central : `core/grad_cam.py`
+
+Le fichier `core/grad_cam.py` contient le code réutilisable pour générer les explications Grad-CAM.
+
+Il prend en charge :
+
+- le chargement d’un checkpoint CNN existant ;
+- la reconstruction du modèle avec son mapping de classes ;
+- la prédiction de l’image ;
+- la sélection automatique de la dernière couche convolutive ;
+- la génération d’une heatmap Grad-CAM ;
+- la superposition de la heatmap sur l’image originale ;
+- le retour des informations utiles : classe prédite, confiance, top-3, image originale, heatmap et overlay.
+
+Les architectures actuellement prises en charge sont :
+
+| Architecture       | Couche cible Grad-CAM                              |
+| ------------------ | -------------------------------------------------- |
+| `resnet50`         | `model.layer4[-1]`                                 |
+| `efficientnet_b0`  | `model.features[-1]`                               |
+| `mobilenet_v3_large` | `model.features[-1]`                             |
+| `vgg16`            | dernière couche `Conv2d` de `model.features`       |
+| `custom_cnn`       | dernière couche `Conv2d` de `model.features`       |
+
+Fonction simple pour expliquer une image :
+
+```python
+from core.grad_cam import explain_image_with_grad_cam
+
+result = explain_image_with_grad_cam(
+    checkpoint_path="models/resnet50_best.pt",
+    image_path="data/raw/Abrasions/abrasions (41).jpg",
+)
+```
+
+Pour traiter plusieurs images efficacement, utiliser plutôt la classe `GradCAMExplainer`, qui charge le modèle une seule fois :
+
+```python
+from core.grad_cam import GradCAMExplainer
+
+explainer = GradCAMExplainer(
+    checkpoint_path="models/resnet50_best.pt",
+)
+
+result = explainer.explain_image(
+    image_path="data/raw/Abrasions/abrasions (41).jpg",
+)
+```
+
+Par défaut, la heatmap est générée pour la classe prédite. Il est aussi possible de forcer une classe cible, par nom ou par indice :
+
+```python
+result = explainer.explain_image(
+    image_path="data/raw/Abrasions/abrasions (41).jpg",
+    target_class="Abrasions",
+)
+```
+
+### Générer les artefacts XAI pour le rapport
+
+Le script principal est :
+
+```text
+scripts/generate_grad_cam_report.py
+```
+
+Commande recommandée :
+
+```bash
+python3 scripts/generate_grad_cam_report.py \
+  --checkpoint models/resnet50_best.pt \
+  --split test \
+  --num-correct 5 \
+  --num-errors 3
+```
+
+Cette commande :
+
+1. charge le checkpoint ResNet50 ;
+2. lit le split demandé, par exemple `data/processed/splits/test.csv` ;
+3. refait les prédictions sur toutes les images du split ;
+4. sélectionne automatiquement les 5 bonnes classifications les plus confiantes ;
+5. sélectionne automatiquement les 3 erreurs les plus confiantes ;
+6. génère une explication Grad-CAM pour chaque image sélectionnée ;
+7. sauvegarde les images individuelles et une grille de synthèse ;
+8. écrit les métadonnées dans des fichiers CSV et JSON.
+
+Sorties générées :
+
+```text
+reports/xai/resnet50/test/
+├── grad_cam_predictions.csv
+├── grad_cam_examples.csv
+├── grad_cam_examples.json
+├── grad_cam_summary_grid.png
+└── examples/
+    ├── *_original.png
+    ├── *_heatmap.png
+    └── *_gradcam_overlay.png
+```
+
+Le fichier le plus directement exploitable dans le rapport est :
+
+```text
+reports/xai/resnet50/test/grad_cam_summary_grid.png
+```
+
+Il affiche côte à côte, pour chaque exemple :
+
+- l’image originale ;
+- la classe réelle ;
+- l’overlay Grad-CAM ;
+- la classe prédite ;
+- le score de confiance.
+
+Les fichiers tabulaires sont utiles pour commenter les résultats :
+
+```text
+reports/xai/resnet50/test/grad_cam_examples.csv
+reports/xai/resnet50/test/grad_cam_examples.json
+```
+
+Chaque ligne contient notamment :
+
+- le chemin de l’image ;
+- la classe réelle ;
+- la classe prédite ;
+- la confiance du modèle ;
+- le type d’exemple : `correct` ou `error` ;
+- la classe cible utilisée pour Grad-CAM ;
+- les chemins vers l’image originale, la heatmap et l’overlay.
+
+### Interprétation attendue dans le rapport
+
+L’analyse doit répondre aux questions suivantes :
+
+- le modèle regarde-t-il principalement la zone de plaie ?
+- les erreurs correspondent-elles à des zones d’attention ambiguës ?
+- le modèle semble-t-il parfois utiliser l’arrière-plan ou des artefacts visuels ?
+- les prédictions très confiantes sont-elles cohérentes avec les heatmaps ?
+- les erreurs entre classes proches, comme `Cut` et `Laceration`, peuvent-elles s’expliquer visuellement ?
+
+Exemple d’interprétation possible :
+
+> Les heatmaps Grad-CAM montrent que le modèle se concentre souvent sur les zones rouges, ouvertes ou texturées correspondant à la plaie. Sur plusieurs bonnes classifications, la zone chaude recouvre directement la lésion. Certaines erreurs restent toutefois explicables : le modèle confond parfois des coupures et lacérations lorsque la forme linéaire de la blessure est proche. Dans quelques cas, l’attention peut aussi s’étendre à des éléments périphériques, ce qui rappelle que le modèle reste un outil pédagogique non validé médicalement.
+
+### Limite médicale
+
+Les heatmaps Grad-CAM aident à interpréter le comportement du modèle, mais elles ne prouvent pas que la décision est cliniquement correcte.
+
+Cette application reste un projet pédagogique. Elle ne constitue pas un dispositif médical et ne remplace pas l’avis d’un professionnel de santé.
+
+---
+
 ## Commandes utiles
 
 ### Lancer l’entraînement CNN
@@ -1191,14 +1731,21 @@ Remarque : la baseline custom est appelée `custom_cnn` dans le code.
 ### Lancer MLflow UI
 
 ```bash
-mlflow ui --backend-store-uri sqlite:///mlflow.db --port 5000
+mlflow ui \
+  --host 127.0.0.1 \
+  --backend-store-uri sqlite:///mlflow.db \
+  --port 5001 \
+  --allowed-hosts "*" \
+  --cors-allowed-origins "*"
 ```
 
 Puis ouvrir :
 
 ```text
-http://localhost:5000
+http://127.0.0.1:5001
 ```
+
+Depuis Streamlit, cette commande est lancée automatiquement quand un entraînement démarre depuis la page Training.
 
 ### Lancer Streamlit
 
@@ -1251,6 +1798,16 @@ python3 scripts/evaluate_similarity.py \
   --num-figures 4
 ```
 
+### Générer le rapport Grad-CAM
+
+```bash
+python3 scripts/generate_grad_cam_report.py \
+  --checkpoint models/resnet50_best.pt \
+  --split test \
+  --num-correct 5 \
+  --num-errors 3
+```
+
 ### Entraîner l’autoencoder OOD
 
 ```bash
@@ -1278,6 +1835,32 @@ python3 scripts/evaluate_autoencoder_latent_gmm.py \
   --image-extensions .jpg,.jpeg
 ```
 
+### Entraîner le VAE OOD
+
+```bash
+python3 scripts/train_vae.py \
+  --epochs 100 \
+  --batch-size 16 \
+  --latent-dim 256 \
+  --beta 0.001 \
+  --lr 1e-4 \
+  --patience 10 \
+  --run-suffix final
+```
+
+### Évaluer le VAE OOD
+
+```bash
+python3 scripts/evaluate_vae_ood.py \
+  --checkpoint models/conv_vae_latent-256_beta-0.001_lr-0.0001_final_best.pt \
+  --threshold-percentile 95 \
+  --score combined \
+  --alpha 0.001 \
+  --batch-size 16 \
+  --ood-dir data/ood \
+  --image-extensions .jpg,.jpeg
+```
+
 ### Lancer le pipeline complet
 
 ```bash
@@ -1292,15 +1875,23 @@ python3 scripts/analyze_image.py \
 
 ---
 
-## Prochaines étapes
+## État actuel et prochaines étapes
 
-Les prochaines étapes du projet sont :
+L’application Streamlit est maintenant branchée sur le pipeline principal :
 
-1. intégrer le pipeline `OOD + ResNet50` dans la page Streamlit de prédiction ;
-2. brancher dans Streamlit la recherche par similarité déjà disponible dans `core/image_similarity.py` ;
-3. ajouter Grad-CAM pour expliquer les prédictions du meilleur modèle ;
-4. enrichir le jeu OOD avec davantage d’images variées ;
-5. exploiter les rapports CNN, OOD et similarité dans le rapport académique.
+1. prédiction avec filtre OOD ;
+2. classification CNN ;
+3. affichage du top-3 ;
+4. overlay Grad-CAM directement sous l’image uploadée ;
+5. recherche de cas similaires ;
+6. lancement d’entraînement depuis la page Training avec suivi MLflow.
+
+Les prochaines étapes utiles sont :
+
+1. enrichir le jeu OOD avec davantage d’images variées ;
+2. lancer plusieurs runs comparables dans `wound-classification-app` ;
+3. exploiter les rapports CNN, OOD, similarité et XAI dans le rapport académique ;
+4. ajouter l’assistant RAG médical si le temps le permet.
 
 ---
 

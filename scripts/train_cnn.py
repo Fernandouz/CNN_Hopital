@@ -1,3 +1,11 @@
+from pathlib import Path
+import os
+import sys
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.append(str(PROJECT_ROOT))
+
 import mlflow.pytorch
 import mlflow
 from sklearn.metrics import precision_score, recall_score, f1_score, classification_report, confusion_matrix
@@ -9,23 +17,17 @@ import torch.nn as nn
 import torch
 from core.data_processing import build_dataloaders
 from core.model_utils import (
+    SUPPORTED_ARCHITECTURES,
     build_model,
     freeze_backbone,
     unfreeze_last_blocks,
     count_total_parameters,
     count_trainable_parameters,
 )
-from pathlib import Path
-import os
-import sys
 import copy
 import json
 import argparse
 import tempfile
-
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.append(str(PROJECT_ROOT))
 
 
 def configure_runtime_dirs():
@@ -53,7 +55,7 @@ def parse_args():
         description="Train CNN model for wound classification")
 
     parser.add_argument("--architecture", type=str, default="resnet50",
-                        choices=["vgg16", "resnet50", "efficientnet_b0", "mobilenet_v3_large", "custom_cnn"])
+                        choices=SUPPORTED_ARCHITECTURES)
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--img-size", type=int, default=224)
@@ -159,8 +161,8 @@ def main():
 
     mlflow.set_tracking_uri(f"sqlite:///{PROJECT_ROOT / 'mlflow.db'}")
 
-    # Tous les runs CNN sont regroupés dans le même experiment MLflow.
-    mlflow.set_experiment("CNN-wound-classification")
+    # Tous les runs CNN lancés depuis l'app sont regroupés dans cet experiment.
+    mlflow.set_experiment("wound-classification-app")
 
     # Nom explicite pour comparer facilement les runs dans MLflow.
     run_name = (
