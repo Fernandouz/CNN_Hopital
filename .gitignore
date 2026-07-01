@@ -1,5 +1,6 @@
 data/raw/
 data/processed/
+data/chroma_kb/
 models/
 mlruns/
 mlflow.db

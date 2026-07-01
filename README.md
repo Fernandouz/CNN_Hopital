@@ -13,9 +13,9 @@ Le système vise à combiner plusieurs briques d’intelligence artificielle :
 - une interface interactive Streamlit ;
 - un suivi expérimental avec MLflow ;
 - une surveillance de dérive des données avec Evidently AI ;
-- éventuellement un assistant LLM/RAG avec traçabilité Langfuse.
+- un assistant LLM/RAG pédagogique avec traçabilité Langfuse optionnelle.
 
-Le projet suit le déroulé du sujet fourni, qui demande notamment une classification CNN, un autoencoder ou modèle équivalent pour la détection OOD, un suivi MLflow, une recherche par embeddings, une interface Streamlit, une analyse de dérive avec Evidently AI, et des extensions optionnelles comme Grad-CAM, RAG/LLM, Langfuse et Docker.
+Le projet suit le déroulé du sujet fourni, qui demande notamment une classification CNN, un autoencoder ou modèle équivalent pour la détection OOD, un suivi MLflow, une recherche par embeddings, une interface Streamlit, une analyse de dérive avec Evidently AI, ainsi que des extensions valorisantes comme Grad-CAM, RAG/LLM, Langfuse et Docker.
 
 ---
 
@@ -52,6 +52,7 @@ CNN_Hopital/
 │   ├── grad_cam.py
 │   ├── image_similarity.py
 │   ├── database.py
+│   ├── rag_pipeline.py
 │   ├── ollama_client.py
 │   └── langfuse_client.py
 │
@@ -87,6 +88,7 @@ CNN_Hopital/
 │   ├── train_vae.py
 │   ├── evaluate_vae_ood.py
 │   ├── generate_grad_cam_report.py
+│   ├── create_medical_kb.py
 │   ├── analyze_image.py
 │   └── drift_monitoring.py
 │
@@ -104,6 +106,7 @@ CNN_Hopital/
 ├── tests/
 ├── mlruns/
 ├── requirements.txt
+├── .streamlit/
 ├── docker-compose.yml
 ├── .gitignore
 └── README.md
@@ -130,6 +133,12 @@ data/raw/
 
 Les images brutes ne doivent pas être versionnées dans Git.  
 Le dossier `data/raw/` est donc exclu via `.gitignore`.
+
+Les index et artefacts générés ne doivent pas non plus être versionnés :
+
+- `data/processed/` pour les splits, uploads temporaires et index de similarité visuelle ;
+- `data/chroma_kb/` pour l’index ChromaDB de la base de connaissances RAG ;
+- `models/`, `mlruns/`, `mlflow.db` et `reports/`.
 
 Un petit jeu d’images hors-domaine est disponible pour tester le filtre OOD :
 
@@ -169,6 +178,7 @@ torchvision
 numpy
 pandas
 matplotlib
+seaborn
 scikit-learn
 Pillow
 tqdm
@@ -178,13 +188,18 @@ opencv-python
 evidently
 chromadb
 sentence-transformers
+ollama
+langfuse
+transformers
+accelerate
+pytest
 ```
 
 ---
 
 ## État d’avancement du projet
 
-Le projet suit le déroulé du sujet, en commençant par la partie Deep Learning : exploration du dataset, data augmentation, rééquilibrage des classes, puis entraînement des premiers modèles CNN.
+Le projet couvre maintenant le cœur Deep Learning et plusieurs extensions valorisantes : exploration du dataset, entraînement CNN avec MLflow, détection OOD, similarité visuelle, Grad-CAM, interface Streamlit multi-pages et assistant RAG médical pédagogique.
 
 ---
 
@@ -1475,7 +1490,7 @@ Pages disponibles :
 | Dataset Explorer | `app-streamlit/pages/1_Dataset_Explorer.py` | Distribution des classes et inspection du dataset |
 | Training | `app-streamlit/pages/2_Training.py` | Configuration et lancement de `python -m scripts.train_cnn` |
 | Prediction | `app-streamlit/pages/3_Prediction.py` | Upload image, OOD, classification, Grad-CAM et similarité |
-| AI Assistant | `app-streamlit/pages/5_AI_Assistant.py` | Page réservée à l’assistant RAG si activé |
+| AI Assistant | `app-streamlit/pages/5_AI_Assistant.py` | Assistant RAG médical pédagogique avec ChromaDB, Ollama/HuggingFace et Langfuse optionnel |
 
 ### Page Training
 
@@ -1523,6 +1538,50 @@ upload image
 ```
 
 L’ancienne page Explainability a été retirée temporairement : l’explicabilité utile à l’utilisateur est maintenant directement intégrée dans la page Prediction, juste sous la photo uploadée.
+
+### Page AI Assistant
+
+La page AI Assistant est intégrée au pipeline RAG de la partie 5. Elle utilise :
+
+- `core/rag_pipeline.py` pour la recherche documentaire et la génération de réponse ;
+- `core/ollama_client.py` pour appeler Ollama localement, avec fallback HuggingFace si Ollama est absent ;
+- `core/langfuse_client.py` pour tracer les appels LLM si les clés Langfuse sont configurées ;
+- `data/base_connaissances_medicales.jsonl` comme base de connaissances médicale pédagogique ;
+- `scripts/create_medical_kb.py` pour indexer cette base dans ChromaDB.
+
+La page propose deux modes :
+
+1. **Diagnostic courant** : réutilise automatiquement le dernier diagnostic valide produit par la page Prediction pendant la session Streamlit.
+2. **Diagnostic manuel** : permet de sélectionner une classe et une confiance simulée pour tester le RAG sans passer par une image.
+
+Dans les deux cas, un bouton unique lance l’analyse RAG. La page affiche ensuite :
+
+- la recommandation générée ;
+- le backend utilisé (`ollama` ou `huggingface`) ;
+- le modèle LLM ;
+- les documents médicaux récupérés dans ChromaDB ;
+- le prompt augmenté envoyé au LLM dans un volet technique.
+
+Préparer la base de connaissances avant la première utilisation :
+
+```bash
+python3 scripts/create_medical_kb.py
+```
+
+Cette commande crée `data/chroma_kb/`, qui est ignoré par Git. Pour reconstruire l’index après modification du JSONL :
+
+```bash
+python3 scripts/create_medical_kb.py --reset
+```
+
+Pour utiliser Ollama localement :
+
+```bash
+ollama pull llama3.2
+ollama serve
+```
+
+Langfuse est optionnel. Si `LANGFUSE_PUBLIC_KEY` et `LANGFUSE_SECRET_KEY` ne sont pas définies dans `.env`, le pipeline utilise un client no-op et continue de fonctionner sans traçabilité.
 
 ---
 
@@ -1753,6 +1812,29 @@ Depuis Streamlit, cette commande est lancée automatiquement quand un entraînem
 streamlit run app-streamlit/Home.py
 ```
 
+### Préparer l’assistant IA / RAG
+
+Indexer la base de connaissances médicale :
+
+```bash
+python3 scripts/create_medical_kb.py
+```
+
+Forcer la réindexation après modification de `data/base_connaissances_medicales.jsonl` :
+
+```bash
+python3 scripts/create_medical_kb.py --reset
+```
+
+Lancer le LLM local recommandé :
+
+```bash
+ollama pull llama3.2
+ollama serve
+```
+
+Sans Ollama, le pipeline tente un fallback HuggingFace local si `transformers` et `accelerate` sont installés.
+
 ### Prédire une image avec le meilleur modèle
 
 ```bash
@@ -1884,14 +1966,16 @@ L’application Streamlit est maintenant branchée sur le pipeline principal :
 3. affichage du top-3 ;
 4. overlay Grad-CAM directement sous l’image uploadée ;
 5. recherche de cas similaires ;
-6. lancement d’entraînement depuis la page Training avec suivi MLflow.
+6. assistant RAG médical pédagogique avec base ChromaDB ;
+7. lancement d’entraînement depuis la page Training avec suivi MLflow.
 
 Les prochaines étapes utiles sont :
 
 1. enrichir le jeu OOD avec davantage d’images variées ;
 2. lancer plusieurs runs comparables dans `wound-classification-app` ;
 3. exploiter les rapports CNN, OOD, similarité et XAI dans le rapport académique ;
-4. ajouter l’assistant RAG médical si le temps le permet.
+4. ajouter un rapport Evidently complet sur les embeddings de référence et de production simulée ;
+5. compléter les tests automatisés autour du RAG, de la similarité et du pipeline Streamlit.
 
 ---
 

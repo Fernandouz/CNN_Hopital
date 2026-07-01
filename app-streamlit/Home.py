@@ -8,6 +8,7 @@ import pandas as pd
 
 from core.config import CLASS_NAMES, SPLIT_DIR
 from core.streamlit_ui import apply_custom_style, render_sidebar, page_header
+from core.ui_metrics import metric_card
 
 st.set_page_config(page_title="Plateforme d'analyse de plaies", page_icon=":material/water_drop:", layout="wide")
 apply_custom_style()
@@ -24,17 +25,21 @@ st.warning("Outil d'aide au diagnostic à visée pédagogique — ne remplace pa
 st.subheader("Statistiques clés")
 col1, col2, col3 = st.columns(3)
 with col1:
-    st.metric("Classes de plaies", len(CLASS_NAMES))
+    metric_card("Classes de plaies", len(CLASS_NAMES))
 with col2:
     try:
         test_df = pd.read_csv(SPLIT_DIR / "test.csv")
         train_df = pd.read_csv(SPLIT_DIR / "train.csv")
         val_df = pd.read_csv(SPLIT_DIR / "val.csv")
-        st.metric("Images (train+val+test)", len(train_df) + len(val_df) + len(test_df))
+        metric_card("Images (train+val+test)", len(train_df) + len(val_df) + len(test_df))
     except FileNotFoundError:
-        st.metric("Images", "—")
+        metric_card("Images", "—")
 with col3:
-    st.metric("Accuracy (test, meilleur modèle)", "89.2 %", help="ResNet50 fine-tuné — macro-F1 test = 0.890, 7 erreurs/65. Détail dans MLflow.")
+    metric_card(
+        "Accuracy (test, meilleur modèle)",
+        "89.2 %",
+        help_text="ResNet50 fine-tuné — macro-F1 test = 0.890, 7 erreurs/65.",
+    )
 
 st.divider()
 st.subheader("Navigation")
